@@ -311,3 +311,228 @@ def test_clear_image_endpoint(client: TestClient, sample_test_image: Path) -> No
     # Subsequent sample must return 400
     sample_resp = client.post("/api/image/sample", json={"x": 10, "y": 10})
     assert sample_resp.status_code == 400
+
+
+def test_static_spa_root_served(client: TestClient, tmp_path: Path) -> None:
+    """Verify GET / returns 200 OK with text/html serving the SPA entrypoint."""
+    repo_root = Path(__file__).resolve().parents[3]
+    real_dist = repo_root / "frontend" / "dist"
+    if real_dist.is_dir() and (real_dist / "index.html").is_file():
+        response = client.get("/")
+    else:
+        # Isolated mock dist when frontend has not been pre-built
+        mock_dist = tmp_path / "mock_dist"
+        mock_dist.mkdir(parents=True, exist_ok=True)
+        (mock_dist / "index.html").write_text(
+            '<!doctype html><html lang="en"><head><title>Photographic Color Harmony Assistant</title></head>'
+            '<body><div id="root"></div></body></html>',
+            encoding="utf-8",
+        )
+        mock_app = create_app(static_dir=mock_dist)
+        mock_client = TestClient(mock_app)
+        response = mock_client.get("/")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert '<div id="root">' in response.text
+    assert "<title>Photographic Color Harmony Assistant</title>" in response.text
+
+
+def test_static_assets_served(client: TestClient, tmp_path: Path) -> None:
+    """Verify static assets under /assets/ are served with correct MIME types (CSS, JS, images)."""
+    repo_root = Path(__file__).resolve().parents[3]
+    assets_dir = repo_root / "frontend" / "dist" / "assets"
+    if assets_dir.is_dir() and any(assets_dir.iterdir()):
+        css_files = list(assets_dir.glob("*.css"))
+        js_files = list(assets_dir.glob("*.js"))
+        assert len(css_files) > 0, "No CSS files found in built assets directory"
+        assert len(js_files) > 0, "No JS files found in built assets directory"
+        css_resp = client.get(f"/assets/{css_files[0].name}")
+        assert css_resp.status_code == 200
+        assert "text/css" in css_resp.headers["content-type"]
+        js_resp = client.get(f"/assets/{js_files[0].name}")
+        assert js_resp.status_code == 200
+        assert "javascript" in js_resp.headers["content-type"]
+
+    # Isolated test directory verifying JS, CSS, and image MIME types explicitly
+    test_dist = tmp_path / "mock_dist_assets"
+    (test_dist / "assets").mkdir(parents=True)
+    (test_dist / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+    (test_dist / "assets" / "style.css").write_text("body { margin: 0; }", encoding="utf-8")
+    (test_dist / "assets" / "bundle.js").write_text("console.log('test');", encoding="utf-8")
+    (test_dist / "assets" / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"></svg>', encoding="utf-8")
+    test_app = create_app(static_dir=test_dist)
+    test_client = TestClient(test_app)
+    css_resp = test_client.get("/assets/style.css")
+    assert css_resp.status_code == 200
+    assert "text/css" in css_resp.headers["content-type"]
+    js_resp = test_client.get("/assets/bundle.js")
+    assert js_resp.status_code == 200
+    assert "javascript" in js_resp.headers["content-type"]
+    svg_resp = test_client.get("/assets/icon.svg")
+    assert svg_resp.status_code == 200
+    assert "image/svg+xml" in svg_resp.headers["content-type"]
+
+
+def test_static_dir_disabled_flag(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify static_dir=False disables static mount without emitting missing-assets warning."""
+    with caplog.at_level("WARNING"):
+        app = create_app(static_dir=False)
+    assert "Frontend static assets not found" not in caplog.text
+    client = TestClient(app)
+    assert client.get("/").status_code == 404
+    assert client.get("/health").status_code == 200
+
+
+def test_static_nonexistent_route(client: TestClient) -> None:
+    """Verify nonexistent paths return 404 status."""
+    response = client.get("/nonexistent/file.txt")
+    assert response.status_code == 404
+
+
+def test_static_mount_non_get_method_rejected(tmp_path: Path) -> None:
+    """Verify non-GET/HEAD HTTP methods against static root mount return 405 Method Not Allowed."""
+    test_dist = tmp_path / "mock_dist_methods"
+    test_dist.mkdir(parents=True, exist_ok=True)
+    (test_dist / "index.html").write_text("<!doctype html><html><body>SPA</body></html>", encoding="utf-8")
+    app = create_app(static_dir=test_dist)
+    client = TestClient(app)
+    post_resp = client.post("/")
+    assert post_resp.status_code == 405
+
+
+def test_route_precedence_over_static_mount(sample_test_image: Path, tmp_path: Path) -> None:
+    """Verify /health, /api/..., and /ws/live retain precedence over static mount even with colliding static files."""
+    mock_dist = tmp_path / "mock_dist_precedence"
+    mock_dist.mkdir(parents=True, exist_ok=True)
+    (mock_dist / "index.html").write_text("<!doctype html><html><body>SPA</body></html>", encoding="utf-8")
+    # Create static files that directly collide with API route paths
+    (mock_dist / "health").write_text("static-health-collision", encoding="utf-8")
+    (mock_dist / "api").mkdir(parents=True, exist_ok=True)
+    ((mock_dist / "api") / "image").mkdir(parents=True, exist_ok=True)
+    ((mock_dist / "api" / "image") / "preview").write_text("static-preview-collision", encoding="utf-8")
+
+    session = AppSession()
+    ws_mgr = ConnectionManager()
+    app = create_app(session=session, ws_manager=ws_mgr, static_dir=mock_dist)
+    target_client = TestClient(app)
+
+    # /health must return JSON from FastAPI route, NOT static file contents
+    health_resp = target_client.get("/health")
+    assert health_resp.status_code == 200
+    assert health_resp.headers["content-type"].startswith("application/json")
+    assert health_resp.json() == {"status": "ok", "version": "0.1.0"}
+    assert "static-health-collision" not in health_resp.text
+
+    # /api/image/preview returns 404 JSON when no image is loaded, NOT static file contents
+    preview_resp = target_client.get("/api/image/preview")
+    assert preview_resp.status_code == 404
+    assert preview_resp.headers["content-type"].startswith("application/json")
+    assert "static-preview-collision" not in preview_resp.text
+
+    # API actions work normally
+    load_resp = target_client.post("/api/image/load", json={"file_path": str(sample_test_image)})
+    assert load_resp.status_code == 200
+
+    # WebSocket connection works normally
+    with target_client.websocket_connect("/ws/live") as websocket:
+        init_msg = websocket.receive_json()
+        assert init_msg["type"] == "connected"
+
+
+def test_server_boots_cleanly_when_dist_missing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Verify server boots cleanly without crashing when frontend/dist is missing."""
+    nonexistent_dir = tmp_path / "does_not_exist"
+    session = AppSession()
+    ws_mgr = ConnectionManager()
+
+    with caplog.at_level("WARNING"):
+        app = create_app(session=session, ws_manager=ws_mgr, static_dir=nonexistent_dir)
+
+    assert "Frontend static assets not found" in caplog.text
+
+    fallback_client = TestClient(app)
+    # GET / returns 404 when dist is missing
+    root_resp = fallback_client.get("/")
+    assert root_resp.status_code == 404
+
+    # API routes still functional
+    health_resp = fallback_client.get("/health")
+    assert health_resp.status_code == 200
+    assert health_resp.json() == {"status": "ok", "version": "0.1.0"}
+
+
+def test_server_boots_cleanly_when_dist_empty(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Verify server boots cleanly when dist directory exists but index.html is missing."""
+    empty_dir = tmp_path / "empty_dist"
+    empty_dir.mkdir()
+    session = AppSession()
+    ws_mgr = ConnectionManager()
+
+    with caplog.at_level("WARNING"):
+        app = create_app(session=session, ws_manager=ws_mgr, static_dir=empty_dir)
+
+    assert "Frontend static assets not found" in caplog.text
+
+    fallback_client = TestClient(app)
+    assert fallback_client.get("/").status_code == 404
+    assert fallback_client.get("/health").status_code == 200
+
+
+def test_server_boots_cleanly_when_default_dist_unresolved(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify default create_app() boots cleanly when resolve_frontend_dist_dir cannot locate assets."""
+    monkeypatch.setattr("web_server.app.resolve_frontend_dist_dir", lambda **kwargs: None)
+    with caplog.at_level("WARNING"):
+        app = create_app()
+    assert "Frontend static assets not found" in caplog.text
+    client = TestClient(app)
+    assert client.get("/").status_code == 404
+    assert client.get("/health").status_code == 200
+
+
+def test_custom_static_dir_mount(tmp_path: Path) -> None:
+    """Verify custom static_dir containing index.html is mounted properly."""
+    custom_dist = tmp_path / "custom_dist"
+    custom_dist.mkdir()
+    custom_index = custom_dist / "index.html"
+    custom_index.write_text("<!doctype html><html><body><h1>Custom SPA</h1></body></html>", encoding="utf-8")
+
+    session = AppSession()
+    ws_mgr = ConnectionManager()
+    app = create_app(session=session, ws_manager=ws_mgr, static_dir=custom_dist)
+    custom_client = TestClient(app)
+
+    response = custom_client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Custom SPA" in response.text
+
+
+def test_frontend_dist_dir_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify FRONTEND_DIST_DIR environment variable is respected."""
+    env_dist = tmp_path / "env_dist"
+    env_dist.mkdir()
+    (env_dist / "index.html").write_text("<!doctype html><html><body>Env SPA</body></html>", encoding="utf-8")
+
+    monkeypatch.setenv("FRONTEND_DIST_DIR", str(env_dist))
+
+    session = AppSession()
+    ws_mgr = ConnectionManager()
+    app = create_app(session=session, ws_manager=ws_mgr)
+    client = TestClient(app)
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Env SPA" in response.text
+
+
+@pytest.mark.parametrize("empty_input", ["", "   ", Path(""), Path("   ")])
+def test_custom_static_dir_empty_or_whitespace(empty_input: Union[str, Path], caplog: pytest.LogCaptureFixture) -> None:
+    """Verify passing empty or whitespace str/Path logs warning and does not mount CWD."""
+    with caplog.at_level("WARNING"):
+        app = create_app(static_dir=empty_input)
+    assert "Frontend static assets not found" in caplog.text
+    client = TestClient(app)
+    assert client.get("/").status_code == 404

@@ -1,8 +1,11 @@
 """FastAPI application factory and route registration for the web server."""
+import logging
+import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from core_harmonies.engine import HarmonyEngine
@@ -20,6 +23,59 @@ from web_server.schemas import (
 from web_server.session import AppSession
 from web_server.ws_manager import ConnectionManager
 
+logger = logging.getLogger(__name__)
+
+
+def resolve_frontend_dist_dir(custom_path: Optional[Union[Path, str]] = None) -> Optional[Path]:
+    """Locate built frontend assets directory containing index.html."""
+    if custom_path is not None:
+        path_str = str(custom_path).strip()
+        if not path_str or (isinstance(custom_path, Path) and not custom_path.parts):
+            return None
+        p = Path(custom_path).resolve()
+        if p.is_dir() and (p / "index.html").is_file():
+            return p
+        return None
+
+    # Check environment variable override
+    env_path = os.environ.get("FRONTEND_DIST_DIR")
+    if env_path and env_path.strip():
+        p = Path(env_path).resolve()
+        if p.is_dir() and (p / "index.html").is_file():
+            return p
+        return None
+
+    try:
+        cwd = Path.cwd()
+    except (OSError, ValueError):
+        cwd = Path(".")
+
+    app_file = Path(__file__).resolve()
+    candidate_paths: list[Path] = []
+
+    # Dynamic search up parent directories to locate repository root or bundled assets
+    for parent in app_file.parents:
+        candidate_paths.append(parent / "frontend" / "dist")
+        candidate_paths.append(parent / "dist")
+
+    # Current working directory candidates
+    candidate_paths.append(cwd / "frontend" / "dist")
+    candidate_paths.append(cwd / "dist")
+
+    seen: set[Path] = set()
+    for candidate in candidate_paths:
+        try:
+            cand_resolved = candidate.resolve()
+            if cand_resolved in seen:
+                continue
+            seen.add(cand_resolved)
+            if cand_resolved.is_dir() and (cand_resolved / "index.html").is_file():
+                return cand_resolved
+        except (OSError, ValueError):
+            continue
+
+    return None
+
 
 class LoadImageJsonRequest(BaseModel):
     """Payload when loading an image via JSON file_path."""
@@ -29,6 +85,7 @@ class LoadImageJsonRequest(BaseModel):
 def create_app(
     session: Optional[AppSession] = None,
     ws_manager: Optional[ConnectionManager] = None,
+    static_dir: Optional[Union[Path, str, bool]] = None,
 ) -> FastAPI:
     """Create and configure FastAPI application instance."""
     app = FastAPI(
@@ -255,6 +312,20 @@ def create_app(
             await ws_mgr.disconnect(websocket)
         except Exception:
             await ws_mgr.disconnect(websocket)
+
+    # Mount frontend static files if enabled, preserving precedence for all existing routes
+    if static_dir is not False:
+        dist_dir = resolve_frontend_dist_dir(
+            custom_path=static_dir if not isinstance(static_dir, bool) else None
+        )
+        if dist_dir is not None and dist_dir.is_dir() and (dist_dir / "index.html").is_file():
+            logger.info("Serving frontend static assets from %s at '/'", dist_dir)
+            app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
+        else:
+            logger.warning(
+                "Frontend static assets not found. Static SPA UI will not be served at '/'. "
+                "Build frontend with 'pnpm build' in frontend/ to generate assets."
+            )
 
     return app
 
