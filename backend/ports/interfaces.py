@@ -25,21 +25,4 @@ class PresetWriterPort(ABC):
         raise NotImplementedError
 
 
-class PluginPort(ABC):
-    """Abstract base interface for harmony scoring and analysis plugins."""
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Unique plugin identifier name."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def initialize(self) -> None:
-        """Lifecycle hook: initialize plugin resources."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def analyze(self, samples: Sequence[ColorSample]) -> dict[str, Any]:
-        """Analyze sampled colors and return score/evaluation metrics."""
-        raise NotImplementedError
+from ports.plugin import PluginPort
