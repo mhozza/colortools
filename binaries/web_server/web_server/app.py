@@ -1,7 +1,7 @@
 """FastAPI application factory and route registration for the web server."""
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -57,33 +57,46 @@ def create_app(
 
     @app.post("/api/image/load", response_model=ImageMetadataResponse)
     async def load_image(
+        request: Request,
         file: Optional[UploadFile] = File(default=None),
         file_path: Optional[str] = Form(default=None),
-        json_req: Optional[LoadImageJsonRequest] = None,
     ) -> ImageMetadataResponse:
         """Load image preview from file path or upload."""
         app_session: AppSession = app.state.session
         ws_mgr: ConnectionManager = app.state.ws_manager
 
-        resolved_path = file_path or (json_req.file_path if json_req else None)
+        resolved_path = file_path
+        content_type = request.headers.get("content-type", "")
 
-        try:
-            if file is not None and file.filename:
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+                if isinstance(body, dict) and "file_path" in body:
+                    resolved_path = body["file_path"]
+            except Exception:
+                pass
+
+        if file is not None and file.filename:
+            try:
                 contents = await file.read()
                 preview = app_session.load_image_bytes(contents, file.filename)
                 source_path = app_session.current_file_path or file.filename
-            elif resolved_path:
-                preview = app_session.load_image(resolved_path)
-                source_path = str(Path(resolved_path).resolve())
-            else:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Either 'file' upload or 'file_path' must be provided.",
-                )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Failed to load image: {exc}") from exc
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to load image: {exc}") from exc
+        elif resolved_path:
+            path_obj = Path(resolved_path)
+            if not path_obj.is_file():
+                raise HTTPException(status_code=404, detail=f"File not found: {resolved_path}")
+            try:
+                preview = app_session.load_image(path_obj)
+                source_path = str(path_obj.resolve())
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to load image: {exc}") from exc
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Either 'file' upload or 'file_path' must be provided.",
+            )
 
         response_data = ImageMetadataResponse(
             file_path=source_path,
