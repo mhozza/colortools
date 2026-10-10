@@ -9,6 +9,7 @@ from services.color_math import (
     rgb_to_hsl,
     signed_circular_delta,
 )
+from services.raw_loader import PreviewImage, RawPreviewLoader
 
 __all__ = [
     "rgb_to_hsl",
@@ -19,4 +20,6 @@ __all__ = [
     "signed_circular_delta",
     "polar_to_cartesian",
     "cartesian_to_polar",
+    "PreviewImage",
+    "RawPreviewLoader",
 ]
