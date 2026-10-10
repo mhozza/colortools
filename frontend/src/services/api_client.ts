@@ -154,6 +154,19 @@ export class ApiClient {
   }
 
   /**
+   * Clear active image preview and session state on the backend.
+   */
+  public async clearImage(): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/api/image/clear`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to clear image session (${response.status}): ${errorText}`);
+    }
+  }
+
+  /**
    * Sample pixel coordinate on the active preview image.
    */
   public async sampleColor(x: number, y: number, name?: string): Promise<ColorSample> {

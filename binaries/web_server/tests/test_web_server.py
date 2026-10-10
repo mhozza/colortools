@@ -294,3 +294,20 @@ def test_websocket_broadcast_on_api_events(client: TestClient, sample_test_image
         ws_event = websocket.receive_json()
         assert ws_event["type"] == "xmp_exported"
         assert ws_event["data"]["success"] is True
+
+
+def test_clear_image_endpoint(client: TestClient, sample_test_image: Path) -> None:
+    """Verify POST /api/image/clear resets session image state and subsequent previews/samples fail."""
+    client.post("/api/image/load", json={"file_path": str(sample_test_image)})
+    assert client.get("/api/image/preview").status_code == 200
+
+    resp = client.post("/api/image/clear")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "cleared"}
+
+    # Subsequent preview must return 404
+    assert client.get("/api/image/preview").status_code == 404
+
+    # Subsequent sample must return 400
+    sample_resp = client.post("/api/image/sample", json={"x": 10, "y": 10})
+    assert sample_resp.status_code == 400

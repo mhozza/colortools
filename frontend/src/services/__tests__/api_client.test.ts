@@ -69,6 +69,18 @@ describe('ApiClient', () => {
     expect(result).toEqual(mockResponse);
   });
 
+  it('clears active image session', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'cleared' }),
+    } as unknown as Response);
+
+    await client.clearImage();
+    expect(globalThis.fetch).toHaveBeenCalledWith('http://127.0.0.1:8000/api/image/clear', {
+      method: 'POST',
+    });
+  });
+
   it('samples pixel color coordinate', async () => {
     const mockSample: ColorSample = {
       id: 'sample-1',

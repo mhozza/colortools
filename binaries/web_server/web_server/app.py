@@ -126,6 +126,13 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.post("/api/image/clear")
+    async def clear_image() -> dict[str, str]:
+        """Clear active image preview and session state."""
+        app_session: AppSession = app.state.session
+        app_session.clear()
+        return {"status": "cleared"}
+
     @app.post("/api/image/sample", response_model=ColorSample)
     async def sample_image(request: SampleColorRequest) -> ColorSample:
         """Sample a pixel coordinate on the active image preview."""
