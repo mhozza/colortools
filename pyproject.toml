@@ -6,5 +6,5 @@ requires-python = ">=3.14"
 dependencies = []
 
 [tool.uv.workspace]
-members = ["backend", "plugins"]
+members = ["backend", "plugins", "binaries/web_server"]
 
