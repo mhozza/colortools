@@ -90,3 +90,14 @@ uv run pytest --cov=core_harmonies --cov=lightroom_xmp --cov-report=term-missing
 - **Lightroom XMP Generator (`plugins/lightroom_xmp/`)**: 8-channel Adobe Camera Raw HSL mapping and non-destructive `.xmp` sidecar serialization preserving raw photo files.
 - **Comprehensive Test Suite (`plugins/tests/`)**: Automated tests verifying 100% harmony scoring on known palettes, spoke directives, valid XMP XML schemas, and non-destructive file operations with $\ge 95\%$ test coverage.
 
+### Milestone 3: Local API Server & IPC (`binaries/web_server/`)
+- **FastAPI Application (`binaries/web_server/web_server/app.py`)**: Local REST API and WebSocket routes wrapping backend services and plugins.
+- **REST Endpoints**:
+  - `POST /api/image/load`: Fast preview extraction from local file or multipart upload with image metadata.
+  - `GET /api/image/preview`: Direct JPEG preview stream.
+  - `POST /api/image/sample`: Pixel sampling returning structured `ColorSample` entities.
+  - `POST /api/harmony/analyze`: Photographic harmony evaluations with match percentage rankings and sample spoke directives.
+  - `POST /api/export/xmp`: Non-destructive Adobe Camera Raw `.xmp` sidecar writer.
+- **WebSocket IPC (`/ws/live`)**: Real-time bi-directional messaging with live event broadcasting.
+- **Integration Test Suite (`binaries/web_server/tests/`)**: 100% passing automated test suite covering all REST and WebSocket operations.
+
